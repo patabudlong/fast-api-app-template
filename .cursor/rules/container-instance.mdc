@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+---
+
+# Your rule content
+
+- separate dev and production folders for docker containers
+
