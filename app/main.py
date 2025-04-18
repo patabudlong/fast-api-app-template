@@ -2,13 +2,26 @@ from fastapi import FastAPI
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-from routers import auth
+from routers import auth, users
 from datetime import datetime
 
 app = FastAPI(
-    title="My FastAPI App",
-    description="A simple FastAPI application",
-    version="1.0.0"
+    title="User Authentication API",
+    description="""
+    API for user authentication and management.
+    
+    Features:
+    * User registration and login
+    * Password management
+    * User profile access
+    * Email availability checking
+    * Health monitoring
+    
+    All protected endpoints require Bearer token authentication.
+    """,
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 @app.on_event("startup")
@@ -38,7 +51,9 @@ async def health_check():
             "timestamp": datetime.utcnow()
         }
 
+# Include both routers
 app.include_router(auth.router)
+app.include_router(users.router)
 
 @app.get("/")
 async def root():

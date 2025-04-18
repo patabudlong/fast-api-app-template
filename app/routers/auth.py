@@ -16,25 +16,41 @@ router = APIRouter(
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT Configuration
-SECRET_KEY = "your-secret-key-keep-it-secret"  # In production, use environment variable
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-class UserCreate(BaseModel):
+# Update user models
+class UserBase(BaseModel):
     email: EmailStr
     username: str
-    full_name: Optional[str] = None
-    password: str
-    disabled: Optional[bool] = False
+    first_name: str
+    last_name: str
+    middle_name: Optional[str] = None
+    extension_name: Optional[str] = None  # For suffixes like Jr., Sr., III, etc.
 
-class UserResponse(BaseModel):
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
     id: str
-    email: str
-    username: str
-    full_name: Optional[str] = None
-    disabled: bool
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "6801c4ef6bbe2a30361d3bca",
+                "email": "john.doe@example.com",
+                "username": "johndoe",
+                "first_name": "John",
+                "middle_name": "William",
+                "last_name": "Doe",
+                "extension_name": "Jr.",
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-01T00:00:00"
+            }
+        }
 
 class Token(BaseModel):
     access_token: str
@@ -94,20 +110,50 @@ async def get_current_user(
             detail="Invalid token"
         )
 
-@router.post("/register", response_model=UserResponse)
-async def register_user(user: UserCreate, request: Request):
-    user_dict = user.dict()
-    # Hash the password
-    user_dict["hashed_password"] = pwd_context.hash(user_dict.pop("password"))
-    user_dict["created_at"] = datetime.utcnow()
-    user_dict["updated_at"] = datetime.utcnow()
-    
+@router.post("/login", response_model=Token)
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    error_msg = "Incorrect email or password"
     try:
-        result = await request.app.mongodb.users.insert_one(user_dict)
-        created_user = await request.app.mongodb.users.find_one({"_id": result.inserted_id})
-        return {**created_user, "id": str(created_user["_id"])}
+        # First try to find by email
+        user = await request.app.mongodb.users.find_one({"email": username})
+        
+        if not user:
+            # If not found by email, try username
+            user = await request.app.mongodb.users.find_one({"username": username})
+            
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_msg
+            )
+
+        if not pwd_context.verify(password, user["hashed_password"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_msg
+            )
+
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={
+                "sub": user["email"],
+                "email": user["email"],
+                "user_id": str(user["_id"])  # Add user_id to token payload
+            },
+            expires_delta=access_token_expires
+        )
+        
+        return {
+            "access_token": access_token,
+            "token_type": "Bearer"
+        }
+    
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Login error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_msg
+        )
 
 @router.get("/users/{user_id}", response_model=UserResponse,
     summary="Get user details",
@@ -194,7 +240,14 @@ async def get_user(
         # Get user data
         from bson import ObjectId
         if user := await request.app.mongodb.users.find_one({"_id": ObjectId(user_id)}):
-            return {**user, "id": str(user["_id"])}
+            return {
+                **user,
+                "id": str(user["_id"]),
+                "first_name": user.get("first_name", ""),
+                "middle_name": user.get("middle_name"),
+                "last_name": user.get("last_name", ""),
+                "extension_name": user.get("extension_name")
+            }
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
@@ -217,51 +270,6 @@ async def get_all_users(request: Request):
         return users
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/login", response_model=Token)
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    error_msg = "Incorrect email or password"
-    try:
-        # First try to find by email
-        user = await request.app.mongodb.users.find_one({"email": username})
-        
-        if not user:
-            # If not found by email, try username
-            user = await request.app.mongodb.users.find_one({"username": username})
-            
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error_msg
-            )
-
-        if not pwd_context.verify(password, user["hashed_password"]):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error_msg
-            )
-
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={
-                "sub": user["email"],
-                "email": user["email"],
-                "user_id": str(user["_id"])  # Add user_id to token payload
-            },
-            expires_delta=access_token_expires
-        )
-        
-        return {
-            "access_token": access_token,
-            "token_type": "Bearer"
-        }
-    
-    except Exception as e:
-        logger.error(f"Login error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_msg
-        )
 
 @router.post("/change-password", response_model=dict)
 async def change_password(
