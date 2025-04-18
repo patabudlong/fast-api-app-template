@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 from typing import Optional
 from passlib.context import CryptContext
@@ -40,7 +40,7 @@ class EmailCheckResponse(BaseModel):
 
 class UserBase(BaseModel):
     email: EmailStr
-    username: str
+    username: Optional[str] = Field(default="", description="Optional username, can be empty")
     first_name: str
     last_name: str
     middle_name: Optional[str] = None
@@ -59,7 +59,7 @@ class UserResponse(UserBase):
             "example": {
                 "id": "6801c4ef6bbe2a30361d3bca",
                 "email": "john.doe@example.com",
-                "username": "johndoe",
+                "username": "",
                 "first_name": "John",
                 "middle_name": "William",
                 "last_name": "Doe",
@@ -145,13 +145,13 @@ async def check_email(
 @router.post("/register", 
     response_model=UserResponse,
     summary="Register new user",
-    description="Create a new user account",
+    description="Create a new user account. Username is optional and can be empty.",
     responses={
         201: {
             "description": "User created successfully"
         },
         400: {
-            "description": "Email already registered or username taken"
+            "description": "Email already registered"
         }
     }
 )
@@ -160,20 +160,23 @@ async def register(request: Request, user: UserCreate):
     Register a new user
     
     Args:
-        user: User registration data
+        user: User registration data with optional username
         
     Returns:
         Created user information
     """
     try:
-        # Check if user exists
+        # Check if email exists
         if await request.app.mongodb.users.find_one({"email": user.email}):
             raise HTTPException(status_code=400, detail="Email already registered")
-        if await request.app.mongodb.users.find_one({"username": user.username}):
-            raise HTTPException(status_code=400, detail="Username already taken")
 
         # Create user document
         user_dict = user.dict()
+        
+        # Remove username if empty string
+        if not user_dict["username"]:
+            user_dict["username"] = ""  # Ensure empty string for consistency
+
         user_dict["hashed_password"] = pwd_context.hash(user_dict.pop("password"))
         user_dict["created_at"] = datetime.utcnow()
         user_dict["updated_at"] = user_dict["created_at"]

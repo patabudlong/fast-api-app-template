@@ -1,12 +1,13 @@
 from fastapi import APIRouter, HTTPException, Request, Depends, Security, Form, status, Header
 from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Annotated
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 import logging
+from bson import ObjectId
 
 router = APIRouter(
     prefix="/auth",
@@ -238,7 +239,6 @@ async def get_user(
             )
 
         # Get user data
-        from bson import ObjectId
         if user := await request.app.mongodb.users.find_one({"_id": ObjectId(user_id)}):
             return {
                 **user,
@@ -302,3 +302,141 @@ async def change_password(
     except Exception as e:
         logger.error(f"Password change error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+class UserUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    extension_name: Optional[str] = None
+    username: Optional[str] = Field(default="", description="Optional username, can be empty")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "first_name": "John",
+                "last_name": "Doe",
+                "middle_name": "William",
+                "extension_name": "Jr.",
+                "username": ""
+            }
+        }
+
+@router.put("/users/{user_id}", 
+    response_model=UserResponse,
+    summary="Update user details",
+    description="Update user profile information. Requires authentication.",
+    responses={
+        200: {
+            "description": "User updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "6801c4ef6bbe2a30361d3bca",
+                        "email": "john.doe@example.com",
+                        "username": "",
+                        "first_name": "John",
+                        "middle_name": "William",
+                        "last_name": "Doe",
+                        "extension_name": "Jr.",
+                        "created_at": "2024-01-01T00:00:00",
+                        "updated_at": "2024-01-01T00:00:00"
+                    }
+                }
+            }
+        },
+        401: {"description": "Unauthorized"},
+        403: {"description": "Forbidden - Can only update own profile"},
+        404: {"description": "User not found"}
+    }
+)
+async def update_user(
+    user_id: str,
+    user_update: UserUpdate,
+    request: Request,
+    token: Annotated[HTTPAuthorizationCredentials, Security(security)]
+):
+    """
+    Update user profile information
+    
+    Args:
+        user_id: ID of user to update
+        user_update: Updated user information
+        token: Bearer token for authentication
+        
+    Returns:
+        Updated user information
+        
+    Raises:
+        401: Invalid token
+        403: Not authorized to update this user
+        404: User not found
+    """
+    try:
+        # Verify token and get user email
+        credentials = token.credentials
+        try:
+            payload = jwt.decode(credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            token_email = payload.get("sub")
+            if not token_email:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token"
+                )
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+
+        # Get current user
+        current_user = await request.app.mongodb.users.find_one({"email": token_email})
+        if not current_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        # Check if user is updating their own profile
+        if str(current_user["_id"]) != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Can only update own profile"
+            )
+
+        # Prepare update data
+        update_data = {
+            k: v for k, v in user_update.dict(exclude_unset=True).items() 
+            if v is not None  # Only include non-None values
+        }
+        
+        if not update_data:
+            # If no valid updates, return current user data
+            return {**current_user, "id": str(current_user["_id"])}
+
+        # Add updated_at timestamp
+        update_data["updated_at"] = datetime.utcnow()
+
+        # Update user
+        result = await request.app.mongodb.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": update_data}
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found or no changes made"
+            )
+
+        # Get updated user
+        updated_user = await request.app.mongodb.users.find_one({"_id": ObjectId(user_id)})
+        return {**updated_user, "id": str(updated_user["_id"])}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error updating user"
+        )
