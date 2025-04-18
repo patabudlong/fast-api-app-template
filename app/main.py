@@ -3,6 +3,7 @@ from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 from routers import auth
+from datetime import datetime
 
 app = FastAPI(
     title="My FastAPI App",
@@ -18,6 +19,24 @@ async def startup_db_client():
     # Create unique indexes
     await app.mongodb.users.create_index("email", unique=True)
     await app.mongodb.users.create_index("username", unique=True)
+
+@app.get("/health")
+async def health_check():
+    try:
+        # Check MongoDB connection
+        await app.mongodb.command("ping")
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+            "timestamp": datetime.utcnow()
+        }
 
 app.include_router(auth.router)
 
