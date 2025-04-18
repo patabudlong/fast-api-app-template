@@ -1,11 +1,25 @@
 from fastapi import FastAPI
 from typing import Optional
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+from routers import auth
 
 app = FastAPI(
     title="My FastAPI App",
     description="A simple FastAPI application",
     version="1.0.0"
 )
+
+@app.on_event("startup")
+async def startup_db_client():
+    app.mongodb_client = AsyncIOMotorClient(os.getenv("MONGODB_URL"))
+    app.mongodb = app.mongodb_client.fastapi_db
+    
+    # Create unique indexes
+    await app.mongodb.users.create_index("email", unique=True)
+    await app.mongodb.users.create_index("username", unique=True)
+
+app.include_router(auth.router)
 
 @app.get("/")
 async def root():
