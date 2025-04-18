@@ -1,0 +1,38 @@
+services:
+  web:
+    build: 
+      context: ../..
+      dockerfile: docker/dev/Dockerfile
+    ports:
+      - "8001:8000"
+    volumes:
+      - ../../app:/app
+    environment:
+      - ENVIRONMENT=development
+      - MONGODB_URL=mongodb://admin:password123@mongodb:27017/fastapi_db?authSource=admin
+    depends_on:
+      - mongodb
+    networks:
+      - app-network
+    restart: always 
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+      - MONGO_INITDB_DATABASE=fastapi_db
+    networks:
+      - app-network
+    restart: always
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongodb_data: 
