@@ -76,44 +76,22 @@ async def get_current_user(
 ):
     try:
         token = credentials.credentials
-        logger.info(f"Decoding token: {token[:10]}...")  # Log first 10 chars of token
-        
-        payload = jwt.decode(
-            token, 
-            SECRET_KEY, 
-            algorithms=[ALGORITHM],
-            options={"verify_exp": True}  # Explicitly verify expiration
-        )
-        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
-        logger.info(f"Token email: {email}")
+        user_id = payload.get("user_id")  # Extract user_id from token
         
-        if not email:
+        if not email or not user_id:
             raise HTTPException(
-                status_code=401, 
-                detail="Invalid token: missing email"
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
             )
             
-        user = await request.app.mongodb.users.find_one({"email": email})
-        if not user:
-            raise HTTPException(
-                status_code=401, 
-                detail="User not found in database"
-            )
-            
-        return user
+        return {"email": email, "user_id": user_id}
         
-    except JWTError as e:
-        logger.error(f"JWT Error: {str(e)}")
+    except JWTError:
         raise HTTPException(
-            status_code=401, 
-            detail=f"Invalid token: {str(e)}"
-        )
-    except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
-        raise HTTPException(
-            status_code=401, 
-            detail=f"Authentication failed: {str(e)}"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
         )
 
 @router.post("/register", response_model=UserResponse)
@@ -267,15 +245,15 @@ async def login(request: Request, username: str = Form(...), password: str = For
         access_token = create_access_token(
             data={
                 "sub": user["email"],
-                "email": user["email"]
+                "email": user["email"],
+                "user_id": str(user["_id"])  # Add user_id to token payload
             },
             expires_delta=access_token_expires
         )
         
         return {
             "access_token": access_token,
-            "token_type": "Bearer",
-            "email": user["email"]  # Return email for confirmation
+            "token_type": "Bearer"
         }
     
     except Exception as e:
