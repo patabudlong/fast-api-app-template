@@ -6,4 +6,5 @@ globs:
 # Your rule content
 
 - separate dev and production folders for docker containers
-- do not add the attribute `version` in the docker-compose.yml files
+- do not add the attribute version in the docker-compose.yml files
+- always use the docker dev and prod folders
