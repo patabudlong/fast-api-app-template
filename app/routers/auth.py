@@ -1,11 +1,13 @@
-from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, HTTPException, Request, Depends, Security, Form
+from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+import logging
+from fastapi import status
 
 router = APIRouter(
     prefix="/auth",
@@ -42,6 +44,13 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     username: Optional[str] = None
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+security = HTTPBearer()
+logger = logging.getLogger(__name__)
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -51,6 +60,52 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+async def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    try:
+        token = credentials.credentials
+        logger.info(f"Decoding token: {token[:10]}...")  # Log first 10 chars of token
+        
+        payload = jwt.decode(
+            token, 
+            SECRET_KEY, 
+            algorithms=[ALGORITHM],
+            options={"verify_exp": True}  # Explicitly verify expiration
+        )
+        
+        email = payload.get("sub")
+        logger.info(f"Token email: {email}")
+        
+        if not email:
+            raise HTTPException(
+                status_code=401, 
+                detail="Invalid token: missing email"
+            )
+            
+        user = await request.app.mongodb.users.find_one({"email": email})
+        if not user:
+            raise HTTPException(
+                status_code=401, 
+                detail="User not found in database"
+            )
+            
+        return user
+        
+    except JWTError as e:
+        logger.error(f"JWT Error: {str(e)}")
+        raise HTTPException(
+            status_code=401, 
+            detail=f"Invalid token: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Authentication error: {str(e)}")
+        raise HTTPException(
+            status_code=401, 
+            detail=f"Authentication failed: {str(e)}"
+        )
 
 @router.post("/register", response_model=UserResponse)
 async def register_user(user: UserCreate, request: Request):
@@ -89,22 +144,78 @@ async def get_all_users(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/login", response_model=Token)
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    error_msg = "Incorrect username or password"
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    error_msg = "Incorrect email or password"
     try:
-        user = await request.app.mongodb.users.find_one({"username": form_data.username})
-        if not user:
-            raise HTTPException(status_code=401, detail=error_msg)
+        # First try to find by email
+        user = await request.app.mongodb.users.find_one({"email": username})
         
-        if not pwd_context.verify(form_data.password, user["hashed_password"]):
-            raise HTTPException(status_code=401, detail=error_msg)
+        if not user:
+            # If not found by email, try username
+            user = await request.app.mongodb.users.find_one({"username": username})
+            
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_msg
+            )
+
+        if not pwd_context.verify(password, user["hashed_password"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_msg
+            )
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
-            data={"sub": user["username"]},
+            data={
+                "sub": user["email"],
+                "email": user["email"]
+            },
             expires_delta=access_token_expires
         )
-        return {"access_token": access_token, "token_type": "bearer"}
+        
+        return {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "email": user["email"]  # Return email for confirmation
+        }
     
     except Exception as e:
-        raise HTTPException(status_code=401, detail=error_msg) 
+        logger.error(f"Login error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_msg
+        )
+
+@router.post("/change-password", response_model=dict)
+async def change_password(
+    request: Request,
+    password_data: PasswordChange,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        if not pwd_context.verify(password_data.current_password, current_user["hashed_password"]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+        new_hashed_password = pwd_context.hash(password_data.new_password)
+        
+        result = await request.app.mongodb.users.update_one(
+            {"_id": current_user["_id"]},
+            {
+                "$set": {
+                    "hashed_password": new_hashed_password,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        if result.modified_count == 1:
+            return {"message": "Password updated successfully"}
+        raise HTTPException(status_code=500, detail="Failed to update password")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Password change error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
