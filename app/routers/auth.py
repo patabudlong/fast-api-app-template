@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
+from jose import JWTError, jwt
 
 router = APIRouter(
     prefix="/auth",
@@ -11,6 +13,11 @@ router = APIRouter(
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT Configuration
+SECRET_KEY = "your-secret-key-keep-it-secret"  # In production, use environment variable
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -27,6 +34,23 @@ class UserResponse(BaseModel):
     disabled: bool
     created_at: datetime
     updated_at: datetime
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 @router.post("/register", response_model=UserResponse)
 async def register_user(user: UserCreate, request: Request):
@@ -62,4 +86,25 @@ async def get_all_users(request: Request):
             users.append({**document, "id": str(document["_id"])})
         return users
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/login", response_model=Token)
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    error_msg = "Incorrect username or password"
+    try:
+        user = await request.app.mongodb.users.find_one({"username": form_data.username})
+        if not user:
+            raise HTTPException(status_code=401, detail=error_msg)
+        
+        if not pwd_context.verify(form_data.password, user["hashed_password"]):
+            raise HTTPException(status_code=401, detail=error_msg)
+
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["username"]},
+            expires_delta=access_token_expires
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
+    
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=error_msg) 
