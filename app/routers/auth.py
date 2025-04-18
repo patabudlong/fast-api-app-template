@@ -123,14 +123,43 @@ async def register_user(user: UserCreate, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/users/{user_id}", response_model=UserResponse)
-async def get_user(user_id: str, request: Request):
-    from bson import ObjectId
+async def get_user(
+    user_id: str, 
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Security(security, scopes=[])
+):
+    """Get user details - requires authentication token"""
     try:
+        # First verify the token
+        token = credentials.credentials
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            if not payload.get("sub"):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token"
+                )
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+
+        # Then get the user data
+        from bson import ObjectId
         if user := await request.app.mongodb.users.find_one({"_id": ObjectId(user_id)}):
             return {**user, "id": str(user["_id"])}
-        raise HTTPException(status_code=404, detail="User not found")
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ID format")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid ID format"
+        )
 
 @router.get("/users", response_model=List[UserResponse], tags=["users"])
 async def get_all_users(request: Request):
