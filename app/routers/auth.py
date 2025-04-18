@@ -440,3 +440,96 @@ async def update_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error updating user"
         )
+
+@router.delete("/users/{user_id}",
+    summary="Delete user account",
+    description="Delete user's own account. Requires authentication.",
+    responses={
+        200: {
+            "description": "User deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "User account deleted successfully"
+                    }
+                }
+            }
+        },
+        401: {"description": "Unauthorized"},
+        403: {"description": "Forbidden - Can only delete own account"},
+        404: {"description": "User not found"}
+    }
+)
+async def delete_user(
+    user_id: str,
+    request: Request,
+    token: Annotated[HTTPAuthorizationCredentials, Security(security)]
+):
+    """
+    Delete user's own account
+    
+    Args:
+        user_id: ID of user to delete
+        token: Bearer token for authentication
+        
+    Returns:
+        Success message
+        
+    Raises:
+        401: Invalid token
+        403: Not authorized to delete this account
+        404: User not found
+    """
+    try:
+        # Verify token and get user email
+        credentials = token.credentials
+        try:
+            payload = jwt.decode(credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            token_email = payload.get("sub")
+            if not token_email:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token"
+                )
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+
+        # Get current user
+        current_user = await request.app.mongodb.users.find_one({"email": token_email})
+        if not current_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        # Check if user is deleting their own account
+        if str(current_user["_id"]) != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Can only delete own account"
+            )
+
+        # Delete user
+        result = await request.app.mongodb.users.delete_one({"_id": ObjectId(user_id)})
+
+        if result.deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        return {
+            "message": "User account deleted successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error deleting user account"
+        )
