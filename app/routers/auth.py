@@ -1,13 +1,12 @@
-from fastapi import APIRouter, HTTPException, Request, Depends, Security, Form
+from fastapi import APIRouter, HTTPException, Request, Depends, Security, Form, status, Header
 from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Annotated
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 import logging
-from fastapi import status
 
 router = APIRouter(
     prefix="/auth",
@@ -48,7 +47,17 @@ class PasswordChange(BaseModel):
     current_password: str
     new_password: str
 
-security = HTTPBearer()
+class TokenHeader:
+    def __init__(self, authorization: Annotated[str, Header(description="Bearer token for authentication", example="Bearer eyJhbGciOiJIUzI1...")]):
+        self.authorization = authorization
+
+# Define security scheme with description
+security = HTTPBearer(
+    scheme_name="Authorization",
+    description="Bearer token authentication",
+    bearerFormat="JWT"
+)
+
 logger = logging.getLogger(__name__)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -122,18 +131,77 @@ async def register_user(user: UserCreate, request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/users/{user_id}", response_model=UserResponse)
+@router.get("/users/{user_id}", response_model=UserResponse,
+    summary="Get user details",
+    description="""
+    Retrieve user details by ID.
+    
+    **Authorization Required:**
+    - Bearer token must be provided in Authorization header
+    - Format: `Bearer your_token_here`
+    
+    **Parameters:**
+    - user_id: The ID of the user to retrieve
+    - Authorization: Bearer token in header
+    """,
+    responses={
+        200: {
+            "description": "User details retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "6801c4ef6bbe2a30361d3bca",
+                        "email": "user@example.com",
+                        "full_name": "John Doe",
+                        "created_at": "2024-01-01T00:00:00",
+                        "updated_at": "2024-01-01T00:00:00"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "Missing or invalid token",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Could not validate credentials"}
+                }
+            }
+        },
+        404: {
+            "description": "User not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "User not found"}
+                }
+            }
+        }
+    }
+)
 async def get_user(
-    user_id: str, 
+    user_id: str,
     request: Request,
-    credentials: HTTPAuthorizationCredentials = Security(security, scopes=[])
+    token: Annotated[HTTPAuthorizationCredentials, Security(security)]
 ):
-    """Get user details - requires authentication token"""
+    """
+    Get user details by ID
+    
+    Args:
+        user_id: User ID to retrieve
+        token: Bearer token for authentication
+        
+    Returns:
+        User profile information
+        
+    Raises:
+        401: Invalid or missing token
+        404: User not found
+        400: Invalid ID format
+    """
     try:
-        # First verify the token
-        token = credentials.credentials
+        # Verify token
+        credentials = token.credentials
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(credentials, SECRET_KEY, algorithms=[ALGORITHM])
             if not payload.get("sub"):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -145,19 +213,19 @@ async def get_user(
                 detail="Invalid token"
             )
 
-        # Then get the user data
+        # Get user data
         from bson import ObjectId
         if user := await request.app.mongodb.users.find_one({"_id": ObjectId(user_id)}):
             return {**user, "id": str(user["_id"])}
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid ID format"
         )
 
