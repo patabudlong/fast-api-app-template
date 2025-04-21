@@ -29,9 +29,11 @@ async def startup_db_client():
     app.mongodb_client = AsyncIOMotorClient(os.getenv("MONGODB_URL"))
     app.mongodb = app.mongodb_client.fastapi_db
     
-    # Create unique indexes
+    # Drop existing indexes
+    await app.mongodb.users.drop_indexes()
+    
+    # Create unique index only for email
     await app.mongodb.users.create_index("email", unique=True)
-    await app.mongodb.users.create_index("username", unique=True)
 
 @app.get("/health")
 async def health_check():
