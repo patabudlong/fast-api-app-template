@@ -166,16 +166,16 @@ async def register(request: Request, user: UserCreate):
         Created user information
     """
     try:
-        # Check if email exists
+        # Check only email exists
         if await request.app.mongodb.users.find_one({"email": user.email}):
             raise HTTPException(status_code=400, detail="Email already registered")
 
         # Create user document
         user_dict = user.dict()
         
-        # Remove username if empty string
-        if not user_dict["username"]:
-            user_dict["username"] = ""  # Ensure empty string for consistency
+        # Ensure username is empty string if not provided
+        if not user_dict.get("username"):
+            user_dict["username"] = ""
 
         user_dict["hashed_password"] = pwd_context.hash(user_dict.pop("password"))
         user_dict["created_at"] = datetime.utcnow()
