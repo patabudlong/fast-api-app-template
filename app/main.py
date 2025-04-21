@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-from routers import auth, users
+from app.routers import auth, users
 from datetime import datetime
 
 app = FastAPI(
