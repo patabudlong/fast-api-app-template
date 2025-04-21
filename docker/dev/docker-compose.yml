@@ -1,5 +1,5 @@
 services:
-  web:
+  fastapi:
     build:
       context: ../../
       dockerfile: docker/dev/Dockerfile
