@@ -2,9 +2,21 @@
 description: 
 globs: 
 ---
+Docker Environment Rules:
 
-# Your rule content
+1. Folder Structure
+   - Always use docker/dev/ and docker/prod/ folders
+   - Never place Docker files in root directory
+   - Keep all environment-specific configurations in respective folders
 
-- separate dev and production folders for docker containers
-- do not add the attribute version in the docker-compose.yml files
-- always use the docker dev and prod folders
+2. Docker Compose Files
+   - Never add 'version' attribute in docker-compose.yml
+   - Place in docker/dev/docker-compose.yml
+   - Place in docker/prod/docker-compose.yml
+   - Use environment-specific configurations
+
+3. Environment Separation
+   - Keep dev and prod configurations completely separate
+   - Use different environment variables per environment
+   - Maintain separate Dockerfiles if needed
+   - Use appropriate naming conventions per environment
